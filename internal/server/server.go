@@ -16,15 +16,12 @@ import (
 	"github.com/veerbal1/homestead/internal/store"
 )
 
-type Code string
-type URL string
-
 type ShortenRequest struct {
-	URL URL `json:"url"`
+	URL string `json:"url"`
 }
 
 type JSONResponse struct {
-	Code Code `json:"code"`
+	Code string `json:"code"`
 }
 
 const maxRequestBodyBytes = 1 << 20 // 1MB
@@ -119,7 +116,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := shortener.CleanLink(string(requestBody.URL))
+	link, err := shortener.CleanLink(requestBody.URL)
 	if err != nil {
 		logger.Warn("shorten: bad url", "error", err, "status", http.StatusBadRequest)
 		http.Error(w, "failed to get parse URL", http.StatusBadRequest)
@@ -139,7 +136,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		err = s.store.Save(r.Context(), code, link)
 		if err == nil {
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(JSONResponse{Code: Code(code)}); err != nil {
+			if err := json.NewEncoder(w).Encode(JSONResponse{Code: code}); err != nil {
 				logger.Error("shorten: encode response failed", "error", err, "code", code)
 			}
 			return
