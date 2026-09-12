@@ -28,11 +28,11 @@ func (rec *statusRecorder) WriteHeader(code int) {
 }
 
 var httpRequestsTotal = promauto.NewCounterVec(
-	prometheus.CounterOpts{Name: "http_requests_total", Help: "..."},
+	prometheus.CounterOpts{Name: "http_requests_total", Help: "Total number of HTTP requests by route and status code."},
 	[]string{"route", "status"},
 )
 var httpRequestDuration = promauto.NewHistogramVec(
-	prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "..."},
+	prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "HTTP request latency in seconds by route."},
 	[]string{"route"},
 )
 
@@ -81,6 +81,9 @@ func (s *Server) metrics(next http.Handler) http.Handler {
 		duration := time.Since(start)
 
 		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		}
 		httpRequestDuration.WithLabelValues(route).Observe(duration.Seconds())
 		httpRequestsTotal.WithLabelValues(route, strconv.Itoa(rec.status)).Inc()
 	})
