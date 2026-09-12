@@ -6,11 +6,35 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 type ctxKey string
 
 const requestIDKey ctxKey = "request_id"
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rec *statusRecorder) WriteHeader(code int) {
+	rec.status = code
+	rec.ResponseWriter.WriteHeader(code)
+}
+
+var httpRequestsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{Name: "http_requests_total", Help: "..."},
+	[]string{"route", "status"},
+)
+var httpRequestDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "..."},
+	[]string{"route"},
+)
 
 func newRequestID() (string, error) {
 	var b [8]byte
@@ -45,5 +69,19 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-ID", id)
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) metrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: 200}
+
+		start := time.Now()
+		next.ServeHTTP(rec, r)
+		duration := time.Since(start)
+
+		route := r.Pattern
+		httpRequestDuration.WithLabelValues(route).Observe(duration.Seconds())
+		httpRequestsTotal.WithLabelValues(route, strconv.Itoa(rec.status)).Inc()
 	})
 }

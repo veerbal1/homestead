@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/veerbal1/homestead/internal/shortener"
 )
 
@@ -47,8 +48,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /r/{code}", s.handleRedirect)
 	mux.HandleFunc("POST /shorten", s.apiKeyAuth(s.handleShorten))
+	mux.Handle("GET /metrics", promhttp.Handler())
 
-	return s.requestID(mux)
+	return s.requestID(s.metrics(mux))
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
