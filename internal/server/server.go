@@ -10,12 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/veerbal1/homestead/internal/shortener"
+	"github.com/veerbal1/homestead/internal/store"
 )
 
 type Code string
@@ -30,14 +28,14 @@ type JSONResponse struct {
 }
 
 type Server struct {
-	pool    *pgxpool.Pool
+	store   *store.Store
 	version string
 	apiKey  string
 	logger  *slog.Logger
 }
 
-func New(pool *pgxpool.Pool, version string, apiKey string, logger *slog.Logger) *Server {
-	return &Server{pool: pool, version: version, apiKey: apiKey, logger: logger}
+func New(store *store.Store, version string, apiKey string, logger *slog.Logger) *Server {
+	return &Server{store: store, version: version, apiKey: apiKey, logger: logger}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -67,7 +65,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
-	if err := s.pool.Ping(ctx); err != nil {
+	if err := s.store.Ping(ctx); err != nil {
 		logger.Error("readyz: db ping failed", "error", err)
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
@@ -86,12 +84,9 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var link string
-	err := s.pool.QueryRow(r.Context(),
-		"SELECT url FROM links WHERE code = $1", codeStr,
-	).Scan(&link)
+	link, err := s.store.Resolve(r.Context(), codeStr)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, store.ErrNotFound) {
 		logger.Warn("redirect: unknown code", "code", codeStr, "status", http.StatusNotFound)
 		http.Error(w, "invalid code", http.StatusNotFound)
 		return
@@ -133,8 +128,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, err = s.pool.Exec(r.Context(),
-			"INSERT INTO links (code, url) VALUES ($1, $2)", code, link)
+		err = s.store.Save(r.Context(), code, link)
 		if err == nil {
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(JSONResponse{Code: Code(code)}); err != nil {
@@ -142,7 +136,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if isUniqueViolation(err) {
+		if errors.Is(err, store.ErrCodeTaken) {
 			logger.Debug("shorten: slug collision, retrying", "attempt", i+1, "code", code)
 			continue
 		}
@@ -166,12 +160,4 @@ func (s *Server) apiKeyAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	})
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return true
-	}
-	return false
 }

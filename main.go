@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/veerbal1/homestead/internal/server"
+	"github.com/veerbal1/homestead/internal/store"
 )
 
 var version = "dev"
@@ -48,7 +49,7 @@ func run() error {
 	}
 	slog.Info("connected to postgres")
 
-	srv := server.New(pool, version, apiKey, logger)
+	srv := server.New(store.New(pool), version, apiKey, logger)
 	mux := srv.Routes()
 
 	httpSrv := &http.Server{
