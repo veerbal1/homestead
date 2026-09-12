@@ -29,6 +29,11 @@ func run() error {
 		return errors.New("DATABASE_URL is not set")
 	}
 
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		return errors.New("API_KEY is not set")
+	}
+
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		return fmt.Errorf("unable to create connection pool: %v", err)
@@ -41,7 +46,7 @@ func run() error {
 
 	log.Println("connected to postgres")
 
-	srv := server.New(pool, version)
+	srv := server.New(pool, version, apiKey)
 	mux := srv.Routes()
 
 	fmt.Println("Listening on port :8080")

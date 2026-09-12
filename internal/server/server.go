@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/veerbal1/homestead/internal/shortener"
@@ -30,10 +31,11 @@ type JSONResponse struct {
 type Server struct {
 	pool    *pgxpool.Pool
 	version string
+	apiKey  string
 }
 
-func New(pool *pgxpool.Pool, version string) *Server {
-	return &Server{pool: pool, version: version}
+func New(pool *pgxpool.Pool, version string, apiKey string) *Server {
+	return &Server{pool: pool, version: version, apiKey: apiKey}
 }
 
 func (s *Server) Routes() *http.ServeMux {
@@ -43,7 +45,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /r/{code}", s.handleRedirect)
-	mux.HandleFunc("POST /shorten", s.handleShorten)
+	mux.HandleFunc("POST /shorten", s.apiKeyAuth(s.handleShorten))
 
 	return mux
 }
@@ -102,29 +104,58 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code, err := shortener.GenerateSlug(6)
-	if err != nil {
-		log.Printf("generate slug: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
 	link, err := shortener.CleanLink(string(requestBody.URL))
 	if err != nil {
 		http.Error(w, "failed to get parse URL", http.StatusBadRequest)
 		return
 	}
 
-	_, err = s.pool.Exec(r.Context(),
-		"INSERT INTO links (code, url) VALUES ($1, $2)", code, link)
-	if err != nil {
+	const maxTries = 5
+
+	for i := 0; i < maxTries; i++ {
+		code, err := shortener.GenerateSlug(6)
+		if err != nil {
+			log.Printf("generate slug: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = s.pool.Exec(r.Context(),
+			"INSERT INTO links (code, url) VALUES ($1, $2)", code, link)
+		if err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(JSONResponse{Code: Code(code)}); err != nil {
+				log.Printf("encode response: %v", err)
+			}
+			return
+		}
+		if isUniqueViolation(err) {
+			continue
+		}
+
 		log.Printf("insert code=%s: %v", code, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(JSONResponse{Code: Code(code)}); err != nil {
-		log.Printf("encode response: %v", err)
+	http.Error(w, "internal error", http.StatusInternalServerError)
+}
+
+func (s *Server) apiKeyAuth(next http.HandlerFunc) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-API-Key")
+		if key != s.apiKey {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	})
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return true
 	}
+	return false
 }
