@@ -47,7 +47,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /r/{code}", s.handleRedirect)
-	mux.HandleFunc("POST /shorten", s.apiKeyAuth(s.handleShorten))
+	mux.Handle("POST /shorten", s.apiKeyAuth(http.HandlerFunc(s.handleShorten)))
 	mux.Handle("GET /metrics", promhttp.Handler())
 
 	return s.requestID(s.metrics(mux))
@@ -158,7 +158,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
-func (s *Server) apiKeyAuth(next http.HandlerFunc) http.HandlerFunc {
+func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("X-API-Key")
 		if key != s.apiKey {
@@ -166,6 +166,6 @@ func (s *Server) apiKeyAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+		next.ServeHTTP(w, r)
 	})
 }
