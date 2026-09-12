@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +19,9 @@ import (
 var version = "dev"
 
 func run() error {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
 	serverErr := make(chan error, 1)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
@@ -43,13 +46,11 @@ func run() error {
 	if err := pool.Ping(ctx); err != nil {
 		return fmt.Errorf("unable to reach database: %v", err)
 	}
+	slog.Info("connected to postgres")
 
-	log.Println("connected to postgres")
-
-	srv := server.New(pool, version, apiKey)
+	srv := server.New(pool, version, apiKey, logger)
 	mux := srv.Routes()
 
-	fmt.Println("Listening on port :8080")
 	httpSrv := &http.Server{
 		Addr:              ":8080",
 		Handler:           mux,
@@ -65,11 +66,11 @@ func run() error {
 		}
 	}()
 
-	log.Println("listening on :8080")
+	slog.Info("Listening on port :8080")
 
 	select {
 	case <-ctx.Done():
-		log.Println("shutting down...")
+		slog.Info("shutting down...")
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -85,7 +86,7 @@ func run() error {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Println(err)
+		slog.Error("startup failed", "error", err)
 		os.Exit(1)
 	}
 }

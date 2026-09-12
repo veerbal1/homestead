@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -32,13 +32,14 @@ type Server struct {
 	pool    *pgxpool.Pool
 	version string
 	apiKey  string
+	logger  *slog.Logger
 }
 
-func New(pool *pgxpool.Pool, version string, apiKey string) *Server {
-	return &Server{pool: pool, version: version, apiKey: apiKey}
+func New(pool *pgxpool.Pool, version string, apiKey string, logger *slog.Logger) *Server {
+	return &Server{pool: pool, version: version, apiKey: apiKey, logger: logger}
 }
 
-func (s *Server) Routes() *http.ServeMux {
+func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -47,7 +48,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /r/{code}", s.handleRedirect)
 	mux.HandleFunc("POST /shorten", s.apiKeyAuth(s.handleShorten))
 
-	return mux
+	return s.requestID(mux)
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
@@ -60,10 +61,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	logger := s.loggerFor(r)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.pool.Ping(ctx); err != nil {
-		log.Printf("readyz: db ping failed: %v", err)
+		logger.Error("readyz: db ping failed", "error", err)
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -72,8 +75,11 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
+	logger := s.loggerFor(r)
+
 	codeStr := r.PathValue("code")
 	if strings.TrimSpace(codeStr) == "" {
+		logger.Warn("redirect: missing code", "status", http.StatusBadRequest)
 		http.Error(w, "missing code", http.StatusBadRequest)
 		return
 	}
@@ -84,12 +90,13 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 	).Scan(&link)
 
 	if errors.Is(err, pgx.ErrNoRows) {
+		logger.Warn("redirect: unknown code", "code", codeStr, "status", http.StatusNotFound)
 		http.Error(w, "invalid code", http.StatusNotFound)
 		return
 	}
 
 	if err != nil {
-		log.Printf("select code=%s: %v", codeStr, err)
+		logger.Error("redirect: select failed", "error", err, "code", codeStr)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -98,14 +105,18 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
+	logger := s.loggerFor(r)
+
 	var requestBody ShortenRequest
 	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		logger.Warn("shorten: bad json", "error", err, "status", http.StatusBadRequest)
 		http.Error(w, "failed to decode json", http.StatusBadRequest)
 		return
 	}
 
 	link, err := shortener.CleanLink(string(requestBody.URL))
 	if err != nil {
+		logger.Warn("shorten: bad url", "error", err, "status", http.StatusBadRequest)
 		http.Error(w, "failed to get parse URL", http.StatusBadRequest)
 		return
 	}
@@ -115,7 +126,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < maxTries; i++ {
 		code, err := shortener.GenerateSlug(6)
 		if err != nil {
-			log.Printf("generate slug: %v", err)
+			logger.Error("shorten: generate slug failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -125,19 +136,21 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(JSONResponse{Code: Code(code)}); err != nil {
-				log.Printf("encode response: %v", err)
+				logger.Error("shorten: encode response failed", "error", err, "code", code)
 			}
 			return
 		}
 		if isUniqueViolation(err) {
+			logger.Debug("shorten: slug collision, retrying", "attempt", i+1, "code", code)
 			continue
 		}
 
-		log.Printf("insert code=%s: %v", code, err)
+		logger.Error("shorten: insert failed", "error", err, "code", code)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
+	logger.Error("shorten: slug collisions exhausted", "tries", maxTries)
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
@@ -145,6 +158,7 @@ func (s *Server) apiKeyAuth(next http.HandlerFunc) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("X-API-Key")
 		if key != s.apiKey {
+			s.loggerFor(r).Warn("unauthorized request", "status", http.StatusUnauthorized)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
