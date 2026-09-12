@@ -1,129 +1,54 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
-	"net/url"
-	"strings"
+	"os"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/veerbal1/homestead/internal/server"
 )
 
 var version = "dev"
 
-type Code string
-type URL string
-
-type ShortenRequest struct {
-	URL URL `json:"url"`
-}
-
-const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-func GenerateSlug(length int) (string, error) {
-	result := make([]byte, length)
-	alphabetLength := big.NewInt(int64(len(alphabet)))
-
-	for i := 0; i < length; i++ {
-		num, err := rand.Int(rand.Reader, alphabetLength)
-		if err != nil {
-			return "", err
-		}
-		result[i] = alphabet[num.Int64()]
-	}
-
-	return string(result), nil
-}
-
-func CleanLink(rawURL string) (string, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return "", fmt.Errorf("cleanlink: empty url")
-	}
-
-	lower := strings.ToLower(rawURL)
-	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
-		rawURL = "https://" + rawURL
-	}
-
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("cleanlink: parse %q: %w", rawURL, err)
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("cleanlink: no host in %q", rawURL)
-	}
-
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
-
-	if parsed.Path == "/" {
-		parsed.Path = ""
-	}
-
-	return parsed.String(), nil
-}
-
-type JSONResponse struct {
-	Code Code `json:"code"`
-}
-
 func main() {
-	urlsMap := make(map[Code]URL)
+	ctx := context.Background()
 
-	http.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "%s", version)
-	})
+	connString := os.Getenv("DATABASE_URL")
+	if connString == "" {
+		log.Fatal("DATABASE_URL is not set")
+	}
 
-	http.HandleFunc("GET /r/{code}", func(w http.ResponseWriter, r *http.Request) {
-		codeStr := r.PathValue("code")
-		if strings.TrimSpace(string(codeStr)) == "" {
-			http.Error(w, "missing code", http.StatusBadRequest)
-			return
-		}
+	pool, err := pgxpool.New(ctx, connString)
+	if err != nil {
+		log.Fatalf("unable to create connection pool: %v", err)
+	}
+	defer pool.Close()
 
-		url, found := urlsMap[Code(codeStr)]
-		if !found {
-			http.Error(w, "invalid code", http.StatusNotFound)
-			return
-		}
+	if err := pool.Ping(ctx); err != nil {
+		log.Fatalf("unable to reach database: %v", err)
+	}
 
-		http.Redirect(w, r, string(url), http.StatusTemporaryRedirect)
-	})
+	log.Println("connected to postgres")
 
-	http.HandleFunc("POST /shorten", func(w http.ResponseWriter, r *http.Request) {
-		var requestBody ShortenRequest
-		err := json.NewDecoder(r.Body).Decode(&requestBody)
-		if err != nil {
-			http.Error(w, "failed to decode json", http.StatusBadRequest)
-			return
-		}
-
-		code, _ := GenerateSlug(6)
-
-		link, err := CleanLink(string(requestBody.URL))
-		if err != nil {
-			http.Error(w, "failed to get parse URL", http.StatusBadRequest)
-			return
-		}
-
-		urlsMap[Code(code)] = URL(link)
-
-		err = json.NewEncoder(w).Encode(JSONResponse{
-			Code: Code(code),
-		})
-
-		if err != nil {
-			http.Error(w, "failed to shorten the URL", http.StatusBadRequest)
-			return
-		}
-	})
+	srv := server.New(pool, version)
+	mux := srv.Routes()
 
 	fmt.Println("Listening on port :8080")
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
+	httpSrv := &http.Server{
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }
