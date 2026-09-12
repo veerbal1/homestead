@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,22 +18,25 @@ import (
 
 var version = "dev"
 
-func main() {
-	ctx := context.Background()
+func run() error {
+	serverErr := make(chan error, 1)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	defer cancel()
 
 	connString := os.Getenv("DATABASE_URL")
 	if connString == "" {
-		log.Fatal("DATABASE_URL is not set")
+		return errors.New("DATABASE_URL is not set")
 	}
 
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
-		log.Fatalf("unable to create connection pool: %v", err)
+		return fmt.Errorf("unable to create connection pool: %v", err)
 	}
 	defer pool.Close()
 
 	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("unable to reach database: %v", err)
+		return fmt.Errorf("unable to reach database: %v", err)
 	}
 
 	log.Println("connected to postgres")
@@ -48,7 +53,34 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+	}()
+
+	log.Println("listening on :8080")
+
+	select {
+	case <-ctx.Done():
+		log.Println("shutting down...")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("server shutdown err: %v", err)
+		}
+	case err := <-serverErr:
+		return fmt.Errorf("server failed: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
