@@ -9,10 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/veerbal1/homestead/internal/config"
 	"github.com/veerbal1/homestead/internal/server"
 	"github.com/veerbal1/homestead/internal/store"
 )
@@ -28,17 +28,13 @@ func run() error {
 
 	defer cancel()
 
-	connString := os.Getenv("DATABASE_URL")
-	if connString == "" {
-		return errors.New("DATABASE_URL is not set")
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
+	cfg.Version = version
 
-	apiKey := os.Getenv("API_KEY")
-	if apiKey == "" {
-		return errors.New("API_KEY is not set")
-	}
-
-	pool, err := pgxpool.New(ctx, connString)
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("unable to create connection pool: %v", err)
 	}
@@ -49,16 +45,16 @@ func run() error {
 	}
 	slog.Info("connected to postgres")
 
-	srv := server.New(store.New(pool), version, apiKey, logger)
+	srv := server.New(store.New(pool), cfg, logger)
 	mux := srv.Routes()
 
 	httpSrv := &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.Addr,
 		Handler:           mux,
-		ReadHeaderTimeout: 2 * time.Second,
-		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
 	}
 
 	go func() {
@@ -67,13 +63,13 @@ func run() error {
 		}
 	}()
 
-	slog.Info("Listening on port :8080")
+	slog.Info("listening", "addr", cfg.Addr)
 
 	select {
 	case <-ctx.Done():
 		slog.Info("shutting down...")
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {

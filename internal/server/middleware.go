@@ -56,7 +56,7 @@ func (s *Server) loggerFor(r *http.Request) *slog.Logger {
 func (s *Server) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
-		if len(id) == 0 || len(id) > 64 {
+		if len(id) == 0 || len(id) > s.cfg.MaxRequestIDLen {
 			var err error
 			id, err = newRequestID()
 			if err != nil {

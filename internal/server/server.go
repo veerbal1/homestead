@@ -9,10 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/veerbal1/homestead/internal/config"
 	"github.com/veerbal1/homestead/internal/shortener"
 	"github.com/veerbal1/homestead/internal/store"
 )
@@ -25,17 +25,14 @@ type JSONResponse struct {
 	Code string `json:"code"`
 }
 
-const maxRequestBodyBytes = 1 << 20 // 1MB
-
 type Server struct {
-	store   *store.Store
-	version string
-	apiKey  string
-	logger  *slog.Logger
+	store  *store.Store
+	cfg    config.Config
+	logger *slog.Logger
 }
 
-func New(store *store.Store, version string, apiKey string, logger *slog.Logger) *Server {
-	return &Server{store: store, version: version, apiKey: apiKey, logger: logger}
+func New(store *store.Store, cfg config.Config, logger *slog.Logger) *Server {
+	return &Server{store: store, cfg: cfg, logger: logger}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -52,7 +49,7 @@ func (s *Server) Routes() http.Handler {
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "%s", s.version)
+	fmt.Fprintf(w, "%s", s.cfg.Version)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +60,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	logger := s.loggerFor(r)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ReadyzTimeout)
 	defer cancel()
 	if err := s.store.Ping(ctx); err != nil {
 		logger.Error("readyz: db ping failed", "error", err)
@@ -105,10 +102,10 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 	logger := s.loggerFor(r)
 
 	var requestBody ShortenRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 		if strings.Contains(err.Error(), "request body too large") {
-			logger.Warn("shorten: body too large", "limit", maxRequestBodyBytes, "status", http.StatusRequestEntityTooLarge)
+			logger.Warn("shorten: body too large", "limit", s.cfg.MaxRequestBodyBytes, "status", http.StatusRequestEntityTooLarge)
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -124,10 +121,8 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const maxTries = 5
-
-	for i := 0; i < maxTries; i++ {
-		code, err := shortener.GenerateSlug(6)
+	for i := 0; i < s.cfg.MaxSlugTries; i++ {
+		code, err := shortener.GenerateSlug(s.cfg.SlugLength)
 		if err != nil {
 			logger.Error("shorten: generate slug failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -152,14 +147,14 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Error("shorten: slug collisions exhausted", "tries", maxTries)
+	logger.Error("shorten: slug collisions exhausted", "tries", s.cfg.MaxSlugTries)
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
 func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("X-API-Key")
-		if subtle.ConstantTimeCompare([]byte(key), []byte(s.apiKey)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.APIKey)) != 1 {
 			s.loggerFor(r).Warn("unauthorized request", "status", http.StatusUnauthorized)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
