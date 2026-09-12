@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,7 +159,7 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiKeyAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("X-API-Key")
-		if key != s.apiKey {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(s.apiKey)) != 1 {
 			s.loggerFor(r).Warn("unauthorized request", "status", http.StatusUnauthorized)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
