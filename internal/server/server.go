@@ -27,6 +27,8 @@ type JSONResponse struct {
 	Code Code `json:"code"`
 }
 
+const maxRequestBodyBytes = 1 << 20 // 1MB
+
 type Server struct {
 	store   *store.Store
 	version string
@@ -105,7 +107,13 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 	logger := s.loggerFor(r)
 
 	var requestBody ShortenRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			logger.Warn("shorten: body too large", "limit", maxRequestBodyBytes, "status", http.StatusRequestEntityTooLarge)
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		logger.Warn("shorten: bad json", "error", err, "status", http.StatusBadRequest)
 		http.Error(w, "failed to decode json", http.StatusBadRequest)
 		return
