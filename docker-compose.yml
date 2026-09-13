@@ -12,17 +12,17 @@ services:
       retries: 5
     volumes:
       - pgdata:/var/lib/postgresql
-    migrate:
-      image: alpine:3.20
-      depends_on:
-        db:
-          condition: service_healthy
-      volumes:
-        - ./migrations:/migrations
-      command: >
-        sh -c "wget -O /usr/local/bin/goose https://github.com/pressly/goose/releases/download/v3.24.0/goose_linux_x86_64 &&
-             chmod +x /usr/local/bin/goose &&
-             goose -dir /migrations postgres '${DATABASE_URL}' up"
+  migrate:
+    image: alpine:3.20
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command: >
+      sh -c "wget -O /usr/local/bin/goose https://github.com/pressly/goose/releases/download/v3.24.0/goose_linux_x86_64 &&
+           chmod +x /usr/local/bin/goose &&
+           goose -dir /migrations postgres '${DATABASE_URL}' up"
   app:
     build: .
     ports:
