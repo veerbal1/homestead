@@ -41,9 +41,10 @@ func run() error {
 	defer pool.Close()
 
 	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("unable to reach database: %v", err)
+		// return fmt.Errorf("unable to reach database: %v", err)
+		logger.Warn("unable to reach database", "error", err)
 	}
-	slog.Info("connected to postgres")
+	// slog.Info("connected to postgres")
 
 	srv := server.New(store.New(pool), cfg, logger)
 	mux := srv.Routes()
