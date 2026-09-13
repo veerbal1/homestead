@@ -1,0 +1,13 @@
+services:
+  app:
+    image: ghcr.io/veerbal1/homestead:${TAG}
+    build: !reset null
+    pull_policy: always
+
+  migrate:
+    image: alpine:3.20
+    build: !reset null
+    command: >
+      sh -c "wget -O /usr/local/bin/goose https://github.com/pressly/goose/releases/download/v3.24.0/goose_linux_x86_64 &&
+             chmod +x /usr/local/bin/goose &&
+             goose -dir /migrations postgres '${DATABASE_URL}' up"
