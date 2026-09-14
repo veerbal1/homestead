@@ -48,3 +48,37 @@ jobs:
           push: true
           tags: ghcr.io/veerbal1/homestead:${{ steps.sha.outputs.short }}
           build-args: VERSION=${{ steps.sha.outputs.short }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run migrations (Neon, before rollout)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@v3.24.0
+          goose -dir ./migrations postgres "$DATABASE_URL" up
+
+      - name: Deploy to box
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          BOX_HOST: ${{ secrets.BOX_HOST }}
+          BOX_USER: ${{ secrets.BOX_USER }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > key.pem
+          chmod 400 key.pem
+          TAG=${GITHUB_SHA::7}
+          ssh -i key.pem -o StrictHostKeyChecking=accept-new "$BOX_USER@$BOX_HOST" \
+            "TAG=$TAG docker compose -f docker-compose.prod.yml pull && \
+             TAG=$TAG docker compose -f docker-compose.prod.yml up -d"
