@@ -1,2 +1,4 @@
-*.md
+/learning/
 *.env
+CLAUDE
+_.md
