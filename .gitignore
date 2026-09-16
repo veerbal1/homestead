@@ -2,3 +2,6 @@
 *.env
 CLAUDE
 _.md
+infra/.terraform/
+*.tfstate
+*.tfstate.*

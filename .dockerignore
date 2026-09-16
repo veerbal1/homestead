@@ -3,3 +3,6 @@ learning*
 *.env
 .git
 app
+infra/.terraform/
+*.tfstate
+*.tfstate.*
