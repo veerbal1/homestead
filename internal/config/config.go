@@ -13,6 +13,7 @@ type Config struct {
 	Addr        string
 	DatabaseURL string
 	APIKey      string
+	RedisURL    string
 
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
@@ -50,6 +51,7 @@ func Load() (Config, error) {
 
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
 	cfg.APIKey = os.Getenv("API_KEY")
+	cfg.RedisURL = os.Getenv("REDIS_URL")
 	if port := os.Getenv("PORT"); port != "" {
 		cfg.Addr = ":" + port
 	}

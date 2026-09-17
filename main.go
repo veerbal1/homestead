@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/veerbal1/homestead/internal/config"
 	"github.com/veerbal1/homestead/internal/server"
@@ -46,7 +47,14 @@ func run() error {
 	}
 	// slog.Info("connected to postgres")
 
-	srv := server.New(store.New(pool), cfg, logger)
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		return fmt.Errorf("unable to parse redis url: %v", err)
+	}
+	rdb := redis.NewClient(redisOpts)
+	defer rdb.Close()
+
+	srv := server.New(store.New(pool), rdb, cfg, logger)
 	mux := srv.Routes()
 
 	httpSrv := &http.Server{

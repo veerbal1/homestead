@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/veerbal1/homestead/internal/config"
 	"github.com/veerbal1/homestead/internal/shortener"
@@ -25,14 +27,20 @@ type JSONResponse struct {
 	Code string `json:"code"`
 }
 
+const (
+	cachePrefix = "link:"
+	cacheTTL    = 24 * time.Hour
+)
+
 type Server struct {
 	store  *store.Store
+	rdb    *redis.Client
 	cfg    config.Config
 	logger *slog.Logger
 }
 
-func New(store *store.Store, cfg config.Config, logger *slog.Logger) *Server {
-	return &Server{store: store, cfg: cfg, logger: logger}
+func New(store *store.Store, rdb *redis.Client, cfg config.Config, logger *slog.Logger) *Server {
+	return &Server{store: store, rdb: rdb, cfg: cfg, logger: logger}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -81,7 +89,18 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := s.store.Resolve(r.Context(), codeStr)
+	cacheKey := cachePrefix + codeStr
+
+	link, err := s.rdb.Get(r.Context(), cacheKey).Result()
+	if err == nil {
+		http.Redirect(w, r, link, http.StatusTemporaryRedirect)
+		return
+	}
+	if !errors.Is(err, redis.Nil) {
+		logger.Warn("redirect: cache get failed, falling back to db", "error", err, "code", codeStr)
+	}
+
+	link, err = s.store.Resolve(r.Context(), codeStr)
 
 	if errors.Is(err, store.ErrNotFound) {
 		logger.Warn("redirect: unknown code", "code", codeStr, "status", http.StatusNotFound)
@@ -93,6 +112,10 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		logger.Error("redirect: select failed", "error", err, "code", codeStr)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	if err := s.rdb.Set(r.Context(), cacheKey, link, cacheTTL).Err(); err != nil {
+		logger.Warn("redirect: cache set failed", "error", err, "code", codeStr)
 	}
 
 	http.Redirect(w, r, link, http.StatusTemporaryRedirect)
