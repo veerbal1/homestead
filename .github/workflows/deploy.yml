@@ -75,31 +75,38 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           BOX_HOST: ${{ secrets.BOX_HOST }}
           BOX_USER: ${{ secrets.BOX_USER }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
         run: |
           echo "$SSH_PRIVATE_KEY" > key.pem
           chmod 400 key.pem
+          SSHOPTS="-i key.pem -o StrictHostKeyChecking=accept-new"
+          # build .env locally (safe quoting for a URL with & ?), then ship config to the box
+          printf 'DATABASE_URL=%s\nAPI_KEY=%s\n' "$DATABASE_URL" "$API_KEY" > env.deploy
+          scp $SSHOPTS docker-compose.prod.yml Caddyfile env.deploy "$BOX_USER@$BOX_HOST:~/"
+          ssh $SSHOPTS "$BOX_USER@$BOX_HOST" "mv ~/env.deploy ~/.env && chmod 600 ~/.env"
+          # pull the new image + (re)start
           TAG=${GITHUB_SHA::7}
-          ssh -i key.pem -o StrictHostKeyChecking=accept-new "$BOX_USER@$BOX_HOST" \
+          ssh $SSHOPTS "$BOX_USER@$BOX_HOST" \
             "TAG=$TAG docker compose -f docker-compose.prod.yml pull && \
              TAG=$TAG docker compose -f docker-compose.prod.yml up -d"
 
-      - name: Smoke test (readyz + version==SHA)
-        env:
-          BOX_HOST: ${{ secrets.BOX_HOST }}
+      - name: Smoke test (HTTPS domain — readyz + version==SHA)
         run: |
+          URL=https://homestead.undercoverdevs.com
           SHA=${GITHUB_SHA::7}
-          # retry /readyz until 200 — container needs a few seconds after up -d
+          # retry /readyz until 200 — container + Caddy cert need a few seconds
           code=000
           for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$BOX_HOST/readyz" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$URL/readyz" || true)
             [ "$code" = "200" ] && break
             echo "readyz attempt $i -> $code, retrying..."
             sleep 3
           done
           [ "$code" = "200" ] || { echo "FAIL: /readyz never returned 200"; exit 1; }
           echo "readyz OK"
-          # assert /version == the SHA we just deployed (proves NEW code is live)
-          got=$(curl -s --max-time 5 "http://$BOX_HOST/version")
+          # assert /version == the SHA we just deployed (proves NEW code is live over HTTPS)
+          got=$(curl -s --max-time 5 "$URL/version")
           echo "deployed SHA=$SHA, served /version=$got"
           [ "$got" = "$SHA" ] || { echo "FAIL: version mismatch (old container?)"; exit 1; }
           echo "SMOKE PASSED"
