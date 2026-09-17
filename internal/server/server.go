@@ -50,7 +50,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /r/{code}", s.handleRedirect)
-	mux.Handle("POST /shorten", s.apiKeyAuth(http.HandlerFunc(s.handleShorten)))
+	mux.Handle("POST /shorten", s.apiKeyAuth(s.rateLimit(http.HandlerFunc(s.handleShorten))))
 	mux.Handle("GET /metrics", promhttp.Handler())
 
 	return s.requestID(s.metrics(mux))

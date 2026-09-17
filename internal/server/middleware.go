@@ -76,6 +76,41 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 	})
 }
 
+const (
+	rateLimitWindow = time.Minute
+	rateLimitMax    = 100
+)
+
+func (s *Server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger := s.loggerFor(r)
+
+		key := "ratelimit:" + r.Header.Get("X-API-Key")
+
+		count, err := s.rdb.Incr(r.Context(), key).Result()
+		if err != nil {
+			logger.Warn("ratelimit: incr failed, failing open", "error", err)
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if count == 1 {
+			if err := s.rdb.Expire(r.Context(), key, rateLimitWindow).Err(); err != nil {
+				logger.Warn("ratelimit: expire failed", "error", err, "key", key)
+			}
+		}
+
+		if count > rateLimitMax {
+			logger.Warn("ratelimit: limit exceeded", "status", http.StatusTooManyRequests)
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) metrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}

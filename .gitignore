@@ -1,5 +1,5 @@
 /learning/
-*.env
+.env*
 CLAUDE
 _.md
 infra/.terraform/
