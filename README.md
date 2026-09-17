@@ -2,10 +2,14 @@
 
 A deliberately small Go URL shortener, taken through a **full production
 lifecycle** by one person — the point of this project is everything *around*
-the app: deploy, data, observability, change, and recovery, each owned
-end-to-end the way a solo/startup engineer would.
+the app: provision, deploy, data, observability, change, and recovery, each
+owned end-to-end the way a solo/startup engineer would.
 
 The app is intentionally tiny. The interesting part is the envelope.
+
+Deployed to **https://homestead.undercoverdevs.com** — provisioned by Terraform
+and spun up on demand (torn down between sessions to control cost), so it isn't
+kept always-on.
 
 ---
 
@@ -21,19 +25,21 @@ The app is intentionally tiny. The interesting part is the envelope.
 ## Architecture
 
 ```
-client ──HTTP──> EC2 box ──> app (Go, :8080, X-API-Key)
-                              │
-                              └──> Neon (managed Postgres)
+client ──HTTPS──> Caddy (:443, auto TLS) ──> app (Go, :8080, X-API-Key)
+                                              │
+                                              └──> Neon (managed Postgres)
+
+infra: one EC2 box, provisioned by Terraform (SG + instance + Docker via cloud-init)
 ```
 
-Single node, HTTP only (see [What I'd do next](#what-id-do-next)).
+Single node, no HA (see [What I'd do next](#what-id-do-next)).
 
 ## Tech
 
 Go · [pgx](https://github.com/jackc/pgx) · Neon (managed Postgres) ·
 [goose](https://github.com/pressly/goose) migrations · Docker (multi-stage,
-distroless, non-root) · GitHub Actions · `slog` structured logging ·
-Prometheus client.
+distroless, non-root) · **Terraform** (IaC) · **Caddy** (reverse proxy + auto
+HTTPS) · GitHub Actions · `slog` structured logging · Prometheus client.
 
 ## Run it locally
 
@@ -56,13 +62,24 @@ curl -X POST localhost:8080/shorten \
 
 This is the actual point of the project.
 
+### Provision — infrastructure as code
+[`infra/`](infra) is Terraform: the security group, the EC2 instance, and an
+AMI lookup. Docker + the compose plugin install themselves on first boot via
+`user_data` (cloud-init) — no manual SSH. `terraform apply` brings the box up;
+`terraform destroy` tears it down to $0. The whole environment is reproducible
+and disposable, which is how cost stays near zero between sessions.
+
 ### Deploy — merge = deploy
 Push to `main` runs [`deploy.yml`](.github/workflows/deploy.yml): **test →
 build → deploy**. Nobody SSHes to release.
 - Image is multi-stage, distroless, non-root, tagged by **git SHA** (never
   `latest`) and pushed to GHCR.
-- The deploy job runs migrations, then SSHes to the box and does
-  `docker compose pull && up -d` for that SHA.
+- The deploy job runs migrations, ships the compose file + Caddyfile + a `.env`
+  (built from GitHub secrets) to the box, then `docker compose pull && up -d`
+  for that SHA. A fresh Terraform box is fully configured by CI — nothing is
+  hand-placed.
+- **Caddy** terminates TLS and reverse-proxies to the app; it obtains and
+  renews Let's Encrypt certificates automatically from just the domain name.
 
 ### Test — CI actually tests
 Unit tests for the core logic ([`internal/shortener`](internal/shortener)):
@@ -88,11 +105,11 @@ Unit tests for the core logic ([`internal/shortener`](internal/shortener)):
 
 ### Recover
 - **Smoke gate:** after deploy, CI retries `/readyz` until 200 and asserts
-  `/version == <deployed SHA>` — a green deploy means the app is *actually*
-  serving the new code, not just "container started".
+  `/version == <deployed SHA>` over **HTTPS** — a green deploy means the app is
+  *actually* serving the new code, not just "container started".
 - **One-click rollback:** [`rollback.yml`](.github/workflows/rollback.yml)
   (`workflow_dispatch` + SHA input) redeploys any previously built image.
-  Deterministic because images are SHA-tagged.
+  Deterministic because images are SHA-tagged; verified over HTTPS.
 - **Incident practice:** a game-day drill + blameless postmortem —
   [`docs/postmortems`](docs/postmortems).
 - **Runbook:** [`docs/runbook.md`](docs/runbook.md) — deploy, rollback, key
@@ -104,6 +121,16 @@ Unit tests for the core logic ([`internal/shortener`](internal/shortener)):
 
 Format: *options · choice · why · what would change it.*
 
+- **Provisioning** — click-ops / shell script · **Terraform**. State-aware and
+  declarative: it applies only the diff, is idempotent, and `destroy` cleanly
+  removes everything — which makes a disposable, rebuild-on-demand box cheap.
+  *Change if:* nothing — IaC is the baseline.
+- **Box bootstrap** — SSH in and install by hand · **`user_data` (cloud-init)**.
+  The box configures itself on first boot; no human, no drift, reproducible.
+  *Change if:* config outgrows a boot script → a real config/image build step.
+- **TLS** — app terminates TLS itself · **reverse proxy (Caddy)**. The app
+  stays plain HTTP and portable; Caddy owns certs + renewal in one place.
+  *Change if:* on Kubernetes → Ingress + cert-manager instead.
 - **Managed vs self-hosted DB** — self-host container · **managed (Neon)**.
   Managed removes toil (backup/failover/patching); the edges I still own
   (connections, migrations, restores) are the same either way. *Change if:*
@@ -114,13 +141,13 @@ Format: *options · choice · why · what would change it.*
   can't function without a warm dependency at start.
 - **Image tag** — `latest` · **git SHA**. SHA-tagging makes every deploy and
   rollback deterministic and individually addressable. *Change if:* never.
-- **Build platforms** — multi-arch · **amd64-only**. The prod box is x86 and
-  nothing consumes arm64 today; arm64 via emulation cost ~5 min/push for zero
-  benefit (build 6.5 min → 56 s). *Change if:* local arm64 (kind on Apple
-  Silicon) or Graviton in prod — re-add arm64 with a build cache.
+- **Build platforms** — multi-arch · **amd64-only**. The box is x86 and nothing
+  consumes arm64 today; arm64 via emulation cost ~5 min/push for zero benefit
+  (build 6.5 min → 56 s). *Change if:* local arm64 or Graviton — re-add arm64
+  with a build cache.
 - **CI → box access** — SSM · **SSH, port 22 open, key-only auth**. Simplest
-  path that works for a single learning box. *Change if:* production —
-  replace with SSM Session Manager (no inbound SSH port).
+  path that works for a single learning box. *Change if:* production — replace
+  with SSM Session Manager (no inbound SSH port).
 
 ---
 
@@ -128,12 +155,14 @@ Format: *options · choice · why · what would change it.*
 
 Honest gaps, roughly in priority:
 
-- **TLS + a domain** (Ingress/reverse proxy + cert-manager or Caddy) — it's
-  HTTP on a bare IP today.
-- **Stable address** — Elastic IP (the auto IP churns on stop/start).
-- **Secrets manager** — secrets currently live in the box `.env` + GitHub
-  Actions secrets; move to SSM Parameter Store / a secrets manager.
-- **Kubernetes (k3s) + Terraform** — the same loop on a real cluster, with the
-  box and networking provisioned as code.
+- **Stable address / DNS automation** — the box uses an auto-assigned IP, so a
+  rebuild needs the DNS `A` record + `BOX_HOST` secret updated (an Elastic IP
+  or a DNS-API script would remove that manual step).
+- **Secrets manager** — secrets live in GitHub Actions secrets + a box `.env`;
+  move to SSM Parameter Store / a secrets manager.
+- **Kubernetes (k3s)** — the same loop on a real cluster (Ingress, rollouts,
+  RBAC), with a load test proving zero failed requests on a rolling deploy.
 - **GitOps** (Argo/Flux) — deploy becomes a git commit, rollback a git revert.
+- **Correctness on the money path** — idempotency keys, a queue consumer with a
+  DLQ, and a reconciliation job.
 - **HA** — this is single-node by design; no redundancy yet.
