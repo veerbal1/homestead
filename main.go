@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -51,6 +52,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("unable to parse redis url: %v", err)
 	}
+	redisOpts.DialTimeout = 100 * time.Millisecond
+	redisOpts.ReadTimeout = 100 * time.Millisecond
+	redisOpts.WriteTimeout = 100 * time.Millisecond
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 
