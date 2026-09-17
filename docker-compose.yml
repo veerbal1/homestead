@@ -32,6 +32,7 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - API_KEY=${API_KEY}
       - REDIS_URL=${REDIS_URL}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +48,14 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "16686:16686" # UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
 
 volumes:
   pgdata:

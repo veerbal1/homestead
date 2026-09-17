@@ -10,10 +10,11 @@ type Config struct {
 	// Version is stamped at build time via -ldflags (not env).
 	Version string
 
-	Addr        string
-	DatabaseURL string
-	APIKey      string
-	RedisURL    string
+	Addr         string
+	DatabaseURL  string
+	APIKey       string
+	RedisURL     string
+	OTLPEndpoint string
 
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
@@ -52,6 +53,7 @@ func Load() (Config, error) {
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
 	cfg.APIKey = os.Getenv("API_KEY")
 	cfg.RedisURL = os.Getenv("REDIS_URL")
+	cfg.OTLPEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	if port := os.Getenv("PORT"); port != "" {
 		cfg.Addr = ":" + port
 	}

@@ -11,10 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/veerbal1/homestead/internal/config"
+	"github.com/veerbal1/homestead/internal/observability"
 	"github.com/veerbal1/homestead/internal/server"
 	"github.com/veerbal1/homestead/internal/store"
 )
@@ -36,7 +40,19 @@ func run() error {
 	}
 	cfg.Version = version
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	shutdown, err := observability.SetupTracing(ctx, cfg.OTLPEndpoint, "homestead")
+	if err != nil {
+		return fmt.Errorf("tracing setup: %w", err)
+	}
+	defer shutdown(context.Background())
+
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("unable to parse database url: %v", err)
+	}
+	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return fmt.Errorf("unable to create connection pool: %v", err)
 	}
@@ -58,12 +74,20 @@ func run() error {
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 
+	if err := redisotel.InstrumentTracing(rdb); err != nil {
+		return fmt.Errorf("redis tracing: %w", err)
+	}
+
 	srv := server.New(store.New(pool), rdb, cfg, logger)
 	mux := srv.Routes()
 
 	httpSrv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           mux,
+		Addr: cfg.Addr,
+		Handler: otelhttp.NewHandler(mux, "http.server",
+			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+				return r.Method + " " + r.URL.Path
+			}),
+		),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
