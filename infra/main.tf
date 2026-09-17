@@ -51,9 +51,20 @@ data "aws_ssm_parameter" "al2023" {
 
 resource "aws_instance" "homestead" {
   ami                    = data.aws_ssm_parameter.al2023.value
-  instance_type          = "t3.small"
+  instance_type          = "t3.micro"
   key_name               = "homestead"
   vpc_security_group_ids = [aws_security_group.homestead.id]
+
+  user_data = <<-EOF
+    #!/bin/bash
+    dnf install -y docker
+    systemctl enable --now docker
+    usermod -aG docker ec2-user
+    mkdir -p /usr/libexec/docker/cli-plugins
+    curl -SL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 \
+      -o /usr/libexec/docker/cli-plugins/docker-compose
+    chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+  EOF
 
   tags = {
     Name = "homestead"
