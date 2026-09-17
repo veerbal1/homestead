@@ -31,12 +31,22 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - API_KEY=${API_KEY}
+      - REDIS_URL=${REDIS_URL}
     depends_on:
       db:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+  redis:
+    image: redis:8
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli ping" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
 volumes:
   pgdata:
