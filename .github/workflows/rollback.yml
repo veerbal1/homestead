@@ -34,20 +34,20 @@ jobs:
             "TAG=$SHA docker compose -f docker-compose.prod.yml pull && \
              TAG=$SHA docker compose -f docker-compose.prod.yml up -d"
 
-      - name: Smoke test (readyz + version==requested SHA)
+      - name: Smoke test (HTTPS domain — readyz + version==requested SHA)
         env:
-          BOX_HOST: ${{ secrets.BOX_HOST }}
           SHA: ${{ inputs.sha }}
         run: |
+          URL=https://homestead.undercoverdevs.com
           code=000
           for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$BOX_HOST/readyz" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$URL/readyz" || true)
             [ "$code" = "200" ] && break
             echo "readyz attempt $i -> $code, retrying..."
             sleep 3
           done
           [ "$code" = "200" ] || { echo "FAIL: /readyz never returned 200"; exit 1; }
-          got=$(curl -s --max-time 5 "http://$BOX_HOST/version")
+          got=$(curl -s --max-time 5 "$URL/version")
           echo "requested=$SHA served=$got"
           [ "$got" = "$SHA" ] || { echo "FAIL: version mismatch"; exit 1; }
           echo "ROLLBACK OK: now serving $got"
