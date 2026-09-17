@@ -93,10 +93,14 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 
 	link, err := s.rdb.Get(r.Context(), cacheKey).Result()
 	if err == nil {
+		cacheRequestsTotal.WithLabelValues("hit").Inc()
 		http.Redirect(w, r, link, http.StatusTemporaryRedirect)
 		return
 	}
-	if !errors.Is(err, redis.Nil) {
+	if errors.Is(err, redis.Nil) {
+		cacheRequestsTotal.WithLabelValues("miss").Inc()
+	} else {
+		cacheRequestsTotal.WithLabelValues("error").Inc()
 		logger.Warn("redirect: cache get failed, falling back to db", "error", err, "code", codeStr)
 	}
 

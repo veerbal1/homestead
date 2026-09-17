@@ -31,6 +31,10 @@ var httpRequestsTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{Name: "http_requests_total", Help: "Total number of HTTP requests by route and status code."},
 	[]string{"route", "status"},
 )
+var cacheRequestsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{Name: "cache_requests_total", Help: "Redirect cache lookups by result."},
+	[]string{"result"},
+)
 var httpRequestDuration = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "HTTP request latency in seconds by route."},
 	[]string{"route"},
