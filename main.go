@@ -68,9 +68,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("unable to parse redis url: %v", err)
 	}
-	redisOpts.DialTimeout = 100 * time.Millisecond
-	redisOpts.ReadTimeout = 100 * time.Millisecond
-	redisOpts.WriteTimeout = 100 * time.Millisecond
+	redisOpts.DialTimeout = 2 * time.Second
+	redisOpts.ReadTimeout = 300 * time.Millisecond
+	redisOpts.WriteTimeout = 300 * time.Millisecond
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 

@@ -12,6 +12,9 @@ import (
 )
 
 func SetupTracing(ctx context.Context, endpoint, serviceName string) (func(context.Context) error, error) {
+	if endpoint == "" {
+		return func(context.Context) error { return nil }, nil
+	}
 	exporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(endpoint),
 		otlptracegrpc.WithInsecure(),

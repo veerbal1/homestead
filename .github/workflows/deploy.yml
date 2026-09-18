@@ -77,12 +77,13 @@ jobs:
           BOX_USER: ${{ secrets.BOX_USER }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
         run: |
           echo "$SSH_PRIVATE_KEY" > key.pem
           chmod 400 key.pem
           SSHOPTS="-i key.pem -o StrictHostKeyChecking=accept-new"
           # build .env locally (safe quoting for a URL with & ?), then ship config to the box
-          printf 'DATABASE_URL=%s\nAPI_KEY=%s\n' "$DATABASE_URL" "$API_KEY" > env.deploy
+          printf 'DATABASE_URL=%s\nAPI_KEY=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$API_KEY" "$REDIS_URL" > env.deploy
           scp $SSHOPTS docker-compose.prod.yml Caddyfile env.deploy "$BOX_USER@$BOX_HOST:~/"
           ssh $SSHOPTS "$BOX_USER@$BOX_HOST" "mv ~/env.deploy ~/.env && chmod 600 ~/.env"
           # pull the new image + (re)start
