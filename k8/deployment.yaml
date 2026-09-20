@@ -17,6 +17,7 @@ spec:
           image: ghcr.io/veerbal1/homestead:b5daf53
           env:
             - name: DATABASE_URL
+              #  Ignore this secret, it is local, not used for production
               value: postgres://homestead:devpass@host.docker.internal:5433/homestead?sslmode=disable
             - name: API_KEY
               value: s3cr3t-key-abc
